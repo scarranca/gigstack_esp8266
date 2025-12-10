@@ -1,5 +1,8 @@
 // Firmware version
-#define FIRMWARE_VERSION "v1.1"
+#define FIRMWARE_VERSION "v1.9"
+
+// Reset button pin (D5 = GPIO14)
+#define RESET_BUTTON_PIN D5
 
 // Blynk Template - get from Blynk Console > Templates
 #define BLYNK_TEMPLATE_ID "TMPL2sDeyxtfV"
@@ -22,10 +25,6 @@
 #define OLED_RESET -1
 #define SCREEN_ADDRESS 0x3C
 
-// Reset button pin (D3 = GPIO0, has built-in pull-up on NodeMCU)
-#define RESET_BUTTON_PIN D3
-#define RESET_HOLD_TIME 3000 // Hold 3 seconds to reset
-
 // Config file path
 #define CONFIG_FILE "/config.json"
 
@@ -42,9 +41,8 @@ bool shouldSaveConfig = false;
 double lastAmount = 0;
 char lastDate[20] = "";
 
-// Reset button tracking
-unsigned long buttonPressStart = 0;
-bool buttonWasPressed = false;
+// Flag to disable button during WiFi setup
+bool wifiSetupComplete = false;
 
 // Forward declaration
 void updateDisplay();
@@ -109,91 +107,6 @@ void saveConfig()
   {
     serializeJson(doc, configFile);
     configFile.close();
-  }
-}
-
-// Clear all settings and restart
-void resetSettings()
-{
-  Serial.println("Resetting all settings...");
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("RESETTING...");
-  display.setCursor(0, 16);
-  display.println("Clearing WiFi...");
-  display.display();
-
-  // Clear WiFi credentials
-  WiFiManager wifiManager;
-  wifiManager.resetSettings();
-
-  display.setCursor(0, 28);
-  display.println("Clearing config...");
-  display.display();
-
-  // Clear config file
-  LittleFS.remove(CONFIG_FILE);
-
-  display.setCursor(0, 40);
-  display.println("Restarting...");
-  display.display();
-
-  delay(1000);
-  ESP.restart();
-}
-
-// Check reset button (call in loop)
-void checkResetButton()
-{
-  bool buttonPressed = (digitalRead(RESET_BUTTON_PIN) == LOW);
-
-  // Debug: print button state every second
-  static unsigned long lastDebug = 0;
-  if (millis() - lastDebug >= 1000)
-  {
-    lastDebug = millis();
-    Serial.print("Button pin state: ");
-    Serial.println(buttonPressed ? "PRESSED" : "released");
-  }
-
-  if (buttonPressed && !buttonWasPressed)
-  {
-    // Button just pressed
-    buttonPressStart = millis();
-    buttonWasPressed = true;
-    Serial.println("Reset button pressed...");
-  }
-  else if (buttonPressed && buttonWasPressed)
-  {
-    // Button held - show progress
-    unsigned long holdTime = millis() - buttonPressStart;
-
-    if (holdTime >= RESET_HOLD_TIME)
-    {
-      resetSettings();
-    }
-    else
-    {
-      // Show countdown on display
-      int secondsLeft = (RESET_HOLD_TIME - holdTime) / 1000 + 1;
-      display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
-      display.setCursor(0, 56);
-      display.setTextSize(1);
-      display.print("Reset in ");
-      display.print(secondsLeft);
-      display.print("s...");
-      display.display();
-    }
-  }
-  else if (!buttonPressed && buttonWasPressed)
-  {
-    // Button released before timeout
-    buttonWasPressed = false;
-    Serial.println("Reset cancelled");
-    updateDisplay(); // Restore normal display
   }
 }
 
@@ -333,15 +246,122 @@ BLYNK_DISCONNECTED()
   updateDisplay();
 }
 
+// Reset all settings
+void resetSettings()
+{
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("RESETTING...");
+  display.display();
+
+  WiFiManager wifiManager;
+  wifiManager.resetSettings();
+  LittleFS.remove(CONFIG_FILE);
+
+  delay(1000);
+  ESP.restart();
+}
+
+// Button state tracking
+unsigned long buttonPressStart = 0;
+bool buttonHeld = false;
+
+// Check button at boot (must hold 3 sec)
+void checkResetButtonAtBoot()
+{
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+  delay(500); // Let pin stabilize
+
+  // Check if button is pressed
+  if (digitalRead(RESET_BUTTON_PIN) == HIGH)
+  {
+    Serial.println("Button not pressed at boot");
+    return;
+  }
+
+  Serial.println("Button PRESSED at boot!");
+
+  // Show countdown
+  for (int i = 3; i > 0; i--)
+  {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.println("RESET BUTTON HELD");
+    display.setCursor(0, 20);
+    display.print("Release to cancel");
+    display.setCursor(0, 40);
+    display.print("Reset in ");
+    display.print(i);
+    display.print("s...");
+    display.display();
+
+    delay(1000);
+
+    if (digitalRead(RESET_BUTTON_PIN) == HIGH)
+    {
+      Serial.println("Cancelled");
+      return;
+    }
+  }
+
+  resetSettings();
+}
+
+// Check button during normal operation
+void checkResetButton()
+{
+  // Don't check button until WiFi setup is complete
+  if (!wifiSetupComplete)
+    return;
+
+  bool pressed = (digitalRead(RESET_BUTTON_PIN) == LOW);
+
+  if (pressed && !buttonHeld)
+  {
+    // Button just pressed
+    buttonPressStart = millis();
+    buttonHeld = true;
+  }
+  else if (pressed && buttonHeld)
+  {
+    // Button still held - check duration
+    unsigned long holdTime = millis() - buttonPressStart;
+
+    if (holdTime >= 3000)
+    {
+      // Held for 3 seconds - reset!
+      resetSettings();
+    }
+    else
+    {
+      // Show countdown on bottom of screen
+      int secondsLeft = 3 - (holdTime / 1000);
+      display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
+      display.setTextSize(1);
+      display.setCursor(0, 56);
+      display.print("Reset in ");
+      display.print(secondsLeft);
+      display.print("s...");
+      display.display();
+    }
+  }
+  else if (!pressed && buttonHeld)
+  {
+    // Button released - cancel
+    buttonHeld = false;
+    updateDisplay(); // Restore normal display
+  }
+}
+
 void setup()
 {
   Serial.begin(115200);
   delay(100);
   Serial.println();
   Serial.println("ESP8266 Started!");
-
-  // Initialize reset button
-  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
 
   // Initialize I2C
   Wire.begin();
@@ -362,6 +382,9 @@ void setup()
   display.setCursor(0, 16);
   display.println("Initializing...");
   display.display();
+
+  // Check reset button at boot
+  checkResetButtonAtBoot();
 
   // Initialize filesystem
   if (!LittleFS.begin())
@@ -416,6 +439,9 @@ void setup()
     Serial.println("Config saved!");
   }
 
+  // WiFi setup complete - enable button
+  wifiSetupComplete = true;
+
   Serial.println("WiFi connected!");
   Serial.print("IP: ");
   Serial.println(WiFi.localIP());
@@ -438,7 +464,7 @@ void setup()
   {
     Serial.println("No Blynk token configured!");
     display.setCursor(0, 52);
-    display.println("No token! Hold D3 3s");
+    display.println("No token configured!");
     display.display();
     delay(3000);
   }
