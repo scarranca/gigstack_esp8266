@@ -4,10 +4,6 @@
 // Reset button pin (D5 = GPIO14)
 #define RESET_BUTTON_PIN D5
 
-// RGB LED pins
-#define LED_RED_PIN D6   // GPIO12
-#define LED_GREEN_PIN D7 // GPIO13
-#define LED_BLUE_PIN D0  // GPIO16 (D8/GPIO15 has boot issues)
 
 // DHT11 sensor pin
 #define DHT_PIN D3 // GPIO0
@@ -63,129 +59,8 @@ float lastHumidity = 0;
 unsigned long lastDHTRead = 0;
 #define DHT_READ_INTERVAL 5000 // Read every 5 seconds
 
-// RGB LED state
-bool ledCommonAnode = false; // Will be auto-detected
-unsigned long lastLedUpdate = 0;
-int ledPulseValue = 0;
-int ledPulseDirection = 5;
-
 // Forward declaration
 void updateDisplay();
-void updateLED();
-
-// ============ RGB LED Functions ============
-
-// Set RGB LED color (0-255 for each channel)
-void setLedColor(int r, int g, int b)
-{
-  if (ledCommonAnode)
-  {
-    // Common anode: invert values (0 = full brightness)
-    analogWrite(LED_RED_PIN, 255 - r);
-    analogWrite(LED_GREEN_PIN, 255 - g);
-    analogWrite(LED_BLUE_PIN, 255 - b);
-  }
-  else
-  {
-    // Common cathode: direct values
-    analogWrite(LED_RED_PIN, r);
-    analogWrite(LED_GREEN_PIN, g);
-    analogWrite(LED_BLUE_PIN, b);
-  }
-}
-
-// Turn off LED
-void setLedOff()
-{
-  setLedColor(0, 0, 0);
-}
-
-// Auto-detect LED type by testing
-void detectLedType()
-{
-  pinMode(LED_RED_PIN, OUTPUT);
-  pinMode(LED_GREEN_PIN, OUTPUT);
-  pinMode(LED_BLUE_PIN, OUTPUT);
-
-  // Start with common cathode assumption
-  ledCommonAnode = false;
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("LED Test");
-  display.println("");
-  display.println("Is LED glowing GREEN?");
-  display.println("");
-  display.println("Wait 3 seconds...");
-  display.display();
-
-  // Test: set green HIGH
-  digitalWrite(LED_RED_PIN, LOW);
-  digitalWrite(LED_GREEN_PIN, HIGH);
-  digitalWrite(LED_BLUE_PIN, LOW);
-
-  delay(3000);
-
-  // If LED lit up, it's common cathode
-  // If not, try common anode
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.println("LED Test");
-  display.println("");
-  display.println("Testing other type...");
-  display.display();
-
-  // Try common anode (invert)
-  digitalWrite(LED_RED_PIN, HIGH);
-  digitalWrite(LED_GREEN_PIN, LOW); // LOW = ON for common anode
-  digitalWrite(LED_BLUE_PIN, HIGH);
-
-  delay(2000);
-
-  // We'll assume common cathode by default
-  // User can check serial output if LED doesn't work right
-  Serial.println("LED detection complete.");
-  Serial.println("If LED was GREEN first: Common Cathode");
-  Serial.println("If LED was GREEN second: Common Anode");
-  Serial.println("Defaulting to Common Cathode. Edit ledCommonAnode if wrong.");
-
-  setLedOff();
-}
-
-// Initialize LED pins
-void initLED()
-{
-  pinMode(LED_RED_PIN, OUTPUT);
-  pinMode(LED_GREEN_PIN, OUTPUT);
-  pinMode(LED_BLUE_PIN, OUTPUT);
-  setLedOff();
-}
-
-// Update LED based on connection status (call in loop)
-void updateLED()
-{
-  unsigned long now = millis();
-  if (now - lastLedUpdate < 100)
-    return;
-  lastLedUpdate = now;
-
-  if (!wifiSetupComplete)
-  {
-    // WiFi setup mode: blue steady
-    setLedColor(0, 0, 50);
-  }
-  else if (Blynk.connected())
-  {
-    // Connected: green steady
-    setLedColor(0, 50, 0);
-  }
-  else
-  {
-    // Disconnected: red steady
-    setLedColor(80, 0, 0);
-  }
-}
 
 // ============ DHT Sensor Functions ============
 
@@ -218,9 +93,6 @@ void readDHT()
 // Callback when WiFiManager enters config mode
 void configModeCallback(WiFiManager *myWiFiManager)
 {
-  // Turn LED blue for setup mode
-  setLedColor(0, 0, 50);
-
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -540,6 +412,13 @@ void setup()
 {
   Serial.begin(115200);
   delay(100);
+
+  // Turn off built-in blue LEDs (active LOW, so HIGH = off)
+  pinMode(2, OUTPUT);   // ESP-12 module LED
+  digitalWrite(2, HIGH);
+  pinMode(16, OUTPUT);  // NodeMCU board LED (D0)
+  digitalWrite(16, HIGH);
+
   Serial.println();
   Serial.println("ESP8266 Started!");
 
@@ -562,33 +441,6 @@ void setup()
   display.setCursor(0, 16);
   display.println("Initializing...");
   display.display();
-
-  // Initialize RGB LED
-  initLED();
-
-  // Quick RGB test - each color 1 second
-  Serial.println("Testing RGB LED...");
-  display.setCursor(0, 28);
-  display.println("LED Test: RED");
-  display.display();
-  setLedColor(50, 0, 0);
-  delay(1000);
-
-  display.fillRect(0, 28, 128, 10, SSD1306_BLACK);
-  display.setCursor(0, 28);
-  display.println("LED Test: GREEN");
-  display.display();
-  setLedColor(0, 50, 0);
-  delay(1000);
-
-  display.fillRect(0, 28, 128, 10, SSD1306_BLACK);
-  display.setCursor(0, 28);
-  display.println("LED Test: BLUE");
-  display.display();
-  setLedColor(0, 0, 50);
-  delay(1000);
-
-  setLedOff();
 
   // Initialize DHT sensor
   dht.begin();
@@ -687,9 +539,6 @@ void loop()
 {
   // Check reset button
   checkResetButton();
-
-  // Update RGB LED status
-  updateLED();
 
   // Read DHT sensor periodically
   readDHT();
